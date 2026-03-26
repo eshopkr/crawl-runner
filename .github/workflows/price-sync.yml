@@ -12,12 +12,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@v2
 
       - name: Restore DB
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p data
-          git fetch origin db-snapshot
+          git -c http.extraHeader="Authorization: basic $(echo -n x-access-token:${GITHUB_TOKEN} | base64)" fetch origin db-snapshot
           git show origin/db-snapshot:db-snapshot.zip > data/db-snapshot.zip
           unzip -o -d data data/db-snapshot.zip
           rm data/db-snapshot.zip
