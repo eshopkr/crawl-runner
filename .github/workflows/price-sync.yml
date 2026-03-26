@@ -1,0 +1,84 @@
+name: Price Sync & Publish
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  price-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Restore DB
+        run: |
+          mkdir -p data
+          git fetch origin db-snapshot
+          git show origin/db-snapshot:db-snapshot.zip > data/db-snapshot.zip
+          unzip -o -d data data/db-snapshot.zip
+          rm data/db-snapshot.zip
+          ls -la data/
+
+      - name: Price sync
+        run: bun run runner.mjs sync-prices --all
+
+      - name: Export data
+        run: |
+          bun run runner.mjs export-data
+          bun run runner.mjs status --export
+          ls -la dist/data/
+
+      - name: Generate token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: eshopkr
+          repositories: json,crawl-runner
+
+      - name: Publish JSON
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          VERSION_TAG="$(TZ=Asia/Seoul date '+%-y.%-m.%-d')"
+          REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/eshopkr/json.git"
+
+          cd dist/data
+          rm -rf .git
+          git init
+          git config user.name "eshopkr"
+          git config user.email "deploy@eshopkr.local"
+          git add -A
+          git commit -m "Deploy ${VERSION_TAG}"
+          git remote add origin "$REMOTE"
+          git branch -M main
+          git push -f origin main
+
+          # Clean old tags, create new semver tag
+          git ls-remote --tags origin | awk '{print $2}' | while read ref; do
+            git push origin --delete "$ref" 2>/dev/null || true
+          done
+          git tag "$VERSION_TAG"
+          git push origin "$VERSION_TAG"
+
+      - name: Snapshot DB
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/eshopkr/crawl-runner.git"
+
+          cd data
+          zip -j -9 db-snapshot.zip eshop_kr.sqlite
+          cd ..
+
+          BLOB=$(git hash-object -w data/db-snapshot.zip)
+          TREE=$(printf '100644 blob %s\tdb-snapshot.zip\n' "$BLOB" | git mktree)
+          DATE=$(TZ=Asia/Seoul date '+%Y-%m-%d')
+          COMMIT=$(git commit-tree "$TREE" -m "db-snapshot ${DATE}")
+
+          git push "$REMOTE" "${COMMIT}:refs/heads/db-snapshot" --force
