@@ -72,6 +72,9 @@ jobs:
         run: |
           REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/eshopkr/crawl-runner.git"
 
+          git config user.name "eshopkr"
+          git config user.email "deploy@eshopkr.local"
+          
           cd data
           zip -j -9 db-snapshot.zip eshop_kr.sqlite
           cd ..
